@@ -1,4 +1,4 @@
-
+#test
 # Mango [![Build Status](https://secure.travis-ci.org/kraih/mango.png)](http://travis-ci.org/kraih/mango)
 
   Pure-Perl non-blocking I/O MongoDB client, optimized for use with the
