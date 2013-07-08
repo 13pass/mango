@@ -190,6 +190,7 @@ sub _start {
   my $collection = $self->collection;
   my $name       = $collection->full_name;
   my $flags = $self->tailable ? {tailable_cursor => 1, await_data => 1} : {};
+  $flags->{ slave_ok } = 1;
   my @args  = (
     $name, $flags, $self->skip, $self->_max, $self->build_query, $self->fields
   );
