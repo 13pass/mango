@@ -138,8 +138,8 @@ sub _decode_binary {
 
 sub _decode_cstring {
   my $bsonref = shift;
-  (my $string, $$bsonref) = unpack 'Z*a*', $$bsonref;
-  return decode 'UTF-8', $string;
+  $$bsonref =~ s/^([^\x00]*)\x00//;
+  return decode 'UTF-8', $1;
 }
 
 sub _decode_doc {
@@ -153,10 +153,8 @@ sub _decode_doc {
     # Null byte (end of document)
     last if $type eq "\x00";
 
-    # Value with valid name
     my $name = _decode_cstring($bsonref);
-    my $value = _decode_value($type, $bsonref);
-    $doc->{$name} = $value if length $name;
+    $doc->{$name} = _decode_value($type, $bsonref);
   }
 
   return $doc;
@@ -288,8 +286,8 @@ sub _encode_object {
 }
 
 sub _encode_string {
-  my $string = encode('UTF-8', shift) . "\x00";
-  return encode_int32(length $string) . $string;
+  my $str = encode('UTF-8', shift) . "\x00";
+  return encode_int32(length $str) . $str;
 }
 
 sub _encode_value {
@@ -337,11 +335,9 @@ sub _encode_value {
 
   # Double
   my $flags = B::svref_2object(\$value)->FLAGS;
-  if ($flags & B::SVp_NOK && !($flags & B::SVp_POK)) {
-    return DOUBLE . $e . pack('d<', $value);
-  }
+  return DOUBLE . $e . pack('d<', $value) if $flags & B::SVp_NOK;
 
-  elsif ($flags & B::SVp_IOK && !($flags & B::SVp_POK)) {
+  if ($flags & B::SVp_IOK) {
 
     # Int32
     return INT32 . $e . encode_int32($value)
@@ -362,6 +358,8 @@ package Mango::BSON::_MinKey;
 
 1;
 
+=encoding utf8
+
 =head1 NAME
 
 Mango::BSON - BSON
@@ -376,6 +374,12 @@ Mango::BSON - BSON
 =head1 DESCRIPTION
 
 L<Mango::BSON> is a minimalistic implementation of L<http://bsonspec.org>.
+
+In addition to a bunch of custom BSON data types it supports normal Perl data
+types like C<Scalar>, C<Regexp>, C<undef>, C<Array> reference, C<Hash>
+reference and will try to call the C<TO_JSON> method on blessed references, or
+stringify them if it doesn't exist. C<Scalar> references will be used to
+generate booleans, based on if their values are true or false.
 
 =head1 FUNCTIONS
 

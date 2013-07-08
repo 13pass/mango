@@ -39,10 +39,10 @@ is bson_oid('510d83915867b405b9000000')->to_epoch, 1359840145,
 
 # Generate Time
 is length bson_time, length(time) + 3, 'right length';
-is length bson_time->to_epoch, length time, 'right length';
+is length int bson_time->to_epoch, length time, 'right length';
 is substr(bson_time, 0, 5), substr(time, 0, 5), 'same start';
 is bson_time(1360626536748), 1360626536748, 'right epoch milliseconds';
-is bson_time(1360626536748)->to_epoch, 1360626536, 'right epoch seconds';
+is bson_time(1360626536748)->to_epoch, 1360626536.748, 'right epoch seconds';
 
 # Empty document
 my $bson = bson_encode {};
@@ -53,6 +53,12 @@ my $bytes = "\x05\x00\x00\x00\x00";
 $doc = bson_decode($bytes);
 is_deeply [keys %$doc], [], 'empty document';
 is_deeply $doc, {}, 'empty document';
+is bson_encode($doc), $bytes, 'successful roundtrip';
+
+# Empty key and value
+$bytes = "\x0c\x00\x00\x00\x02\x00\x01\x00\x00\x00\x00\x00";
+$doc   = bson_decode($bytes);
+is_deeply $doc, {'' => ''}, 'right document';
 is bson_encode($doc), $bytes, 'successful roundtrip';
 
 # Incomplete document
@@ -169,8 +175,8 @@ is bson_encode($doc), $bytes, 'successful roundtrip';
 
 # Object id roundtrip
 my $id = '000102030405060708090a0b';
-$bytes = "\x16\x00\x00\x00\x07\x6F\x69\x64\x00\x00"
-  . "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x00";
+$bytes = "\x16\x00\x00\x00\x07\x6f\x69\x64\x00\x00"
+  . "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x00";
 $doc = bson_decode($bytes);
 isa_ok $doc->{oid}, 'Mango::BSON::ObjectID', 'right class';
 is $doc->{oid}->to_epoch, 66051, 'right epoch time';
@@ -179,7 +185,7 @@ is bson_encode($doc), $bytes, 'successful roundtrip';
 
 # Regex roundtrip
 $bytes
-  = "\x12\x00\x00\x00\x0B\x72\x65\x67\x65\x78\x00\x61\x2A\x62\x00\x69\x00\x00";
+  = "\x12\x00\x00\x00\x0b\x72\x65\x67\x65\x78\x00\x61\x2a\x62\x00\x69\x00\x00";
 $doc = bson_decode($bytes);
 is_deeply $doc, {regex => qr/a*b/i}, 'right document';
 like 'AAB',  $doc->{regex}, 'regex works';
@@ -295,6 +301,26 @@ is_deeply bson_decode(bson_encode({false => \!!$bytes})),
   {false => bson_false}, 'encode false boolean from double negated reference';
 is_deeply bson_decode(bson_encode({false => \$bytes})), {false => bson_false},
   'encode false boolean from reference';
+
+# Upgraded numbers
+my $num = 3;
+my $str = "$num";
+is_deeply bson_decode(bson_encode {test => [$num, $str]}), {test => [3, "3"]},
+  'upgraded number detected';
+$num = 3.21;
+$str = "$num";
+is_deeply bson_decode(bson_encode {test => [$num, $str]}),
+  {test => [3.21, "3.21"]}, 'upgraded number detected';
+$str = '0 but true';
+$num = 1 + $str;
+is_deeply bson_decode(bson_encode {test => [$num, $str]}), {test => [1, 0]},
+  'upgraded number detected';
+
+# "inf" and "nan"
+is_deeply bson_decode(bson_encode {test => [9**9**9]}), {test => [9**9**9]},
+  'successful roundtrip';
+is_deeply bson_decode(bson_encode {test => [-sin(9**9**9)]}),
+  {test => [-sin(9**9**9)]}, 'successful roundtrip';
 
 # Time to JSON
 is j({time => bson_time(1360626536748)}), '{"time":1360626536748}',
