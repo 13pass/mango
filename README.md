@@ -1,4 +1,7 @@
-#test
+# Forking mango  
+
+This fork only add the 'slave_ok' flag to 1 by default to allow mango to read on secondary replica set member till it got supports for read preferences.
+
 # Mango [![Build Status](https://secure.travis-ci.org/kraih/mango.png)](http://travis-ci.org/kraih/mango)
 
   Pure-Perl non-blocking I/O MongoDB client, optimized for use with the
