@@ -23,7 +23,7 @@ has protocol        => sub { Mango::Protocol->new };
 has w               => 1;
 has wtimeout        => 1000;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 # Operations with reply
 for my $name (qw(get_more query)) {
@@ -102,7 +102,8 @@ sub db {
 sub is_active {
   my $self = shift;
   return !!(@{$self->{queue} || []}
-    || grep { $_->{last} } values %{$self->{connections} || {}});
+    || grep { $_->{last} && !$_->{start} }
+    values %{$self->{connections} || {}});
 }
 
 sub kill_cursors {
