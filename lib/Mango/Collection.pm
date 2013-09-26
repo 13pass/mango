@@ -49,8 +49,11 @@ sub ensure_index {
 }
 
 sub find {
-  my ($self, $query) = @_;
-  return Mango::Cursor->new(collection => $self, query => $query // {});
+  Mango::Cursor->new(
+    collection => shift,
+    query      => shift // {},
+    fields     => shift // {}
+  );
 }
 
 sub find_and_modify {
@@ -60,12 +63,12 @@ sub find_and_modify {
 }
 
 sub find_one {
-  my ($self, $query) = @_;
+  my ($self, $query) = (shift, shift);
   $query = {_id => $query} if ref $query eq 'Mango::BSON::ObjectID';
   my $cb = ref $_[-1] eq 'CODE' ? pop : undef;
 
   # Non-blocking
-  my $cursor = $self->find($query)->limit(-1);
+  my $cursor = $self->find($query, @_)->limit(-1);
   return $cursor->next(sub { shift; $self->$cb(@_) }) if $cb;
 
   # Blocking
@@ -114,7 +117,7 @@ sub insert {
 sub map_reduce {
   my ($self, $map, $reduce) = (shift, shift, shift);
   my $cb = ref $_[-1] eq 'CODE' ? pop : undef;
-  my $command = bson_doc
+  my $mr = bson_doc
     mapreduce => $self->name,
     map       => ref $map ? $map : bson_code($map),
     reduce    => ref $reduce ? $reduce : bson_code($reduce),
@@ -123,7 +126,7 @@ sub map_reduce {
   # Non-blocking
   my $db = $self->db;
   return $db->command(
-    $command => sub {
+    $mr => sub {
       my ($db, $err, $doc) = @_;
       my $result
         = $doc->{result} ? $db->collection($doc->{result}) : $doc->{results};
@@ -132,7 +135,7 @@ sub map_reduce {
   ) if $cb;
 
   # Blocking
-  my $doc = $db->command($command);
+  my $doc = $db->command($mr);
   return $doc->{result} ? $db->collection($doc->{result}) : $doc->{results};
 }
 
@@ -151,11 +154,12 @@ sub save {
   return $self->insert($doc, $cb) unless $doc->{_id};
 
   # Update non-blocking
-  my @args = ({_id => $doc->{_id}}, $doc, {upsert => 1});
-  return $self->update(@args => sub { shift->$cb(shift, $doc->{_id}) }) if $cb;
+  my @update = ({_id => $doc->{_id}}, $doc, {upsert => 1});
+  return $self->update(@update => sub { shift->$cb(shift, $doc->{_id}) })
+    if $cb;
 
   # Update blocking
-  $self->update(@args);
+  $self->update(@update);
   return $doc->{_id};
 }
 
@@ -194,14 +198,14 @@ sub _handle {
     ($self->full_name, @_) => sub {
       my ($mango, $err, $reply) = @_;
       $err ||= $mango->protocol->command_error($reply);
-      $self->$cb($err, $reply->{docs}[0]{n});
+      $self->$cb($err, $reply->{docs}[0]);
     }
   ) if $cb;
 
   # Blocking
   my $reply = $mango->$method($self->full_name, @_);
   if (my $err = $mango->protocol->command_error($reply)) { croak $err }
-  return $reply->{docs}[0]{n};
+  return $reply->{docs}[0];
 }
 
 sub _indexes {
@@ -335,18 +339,19 @@ append a callback to perform operation non-blocking.
 
   my $cursor = $collection->find;
   my $cursor = $collection->find({foo => 'bar'});
+  my $cursor = $collection->find({foo => 'bar'}, {foo => 1});
 
 Get L<Mango::Cursor> object for query.
 
 =head2 find_and_modify
 
   my $doc = $collection->find_and_modify(
-    {query => {foo => 1}, update => {'$set' => {foo => 2}}});
+    {query => {foo => 'bar'}, update => {'$set' => {foo => 'baz'}}});
 
 Update document atomically. You can also append a callback to perform
 operation non-blocking.
 
-  my $opts = {query => {foo => 1}, update => {'$set' => {foo => 2}}};
+  my $opts = {query => {foo => 'bar'}, update => {'$set' => {foo => 'baz'}}};
   $collection->find_and_modify($opts => sub {
     my ($collection, $err, $doc) = @_;
     ...
@@ -356,7 +361,8 @@ operation non-blocking.
 =head2 find_one
 
   my $doc = $collection->find_one({foo => 'bar'});
-  my $doc = $collection->find_one($oid);
+  my $doc = $collection->find_one({foo => 'bar'}, {foo => 1});
+  my $doc = $collection->find_one($oid, {foo => 1});
 
 Find one document. You can also append a callback to perform operation
 non-blocking.
@@ -420,15 +426,15 @@ operation non-blocking.
 
 =head2 remove
 
-  my $num = $collection->remove;
-  my $num = $collection->remove({foo => 'bar'});
-  my $num = $collection->remove({foo => 'bar'}, {single => 1});
+  my $doc = $collection->remove;
+  my $doc = $collection->remove({foo => 'bar'});
+  my $doc = $collection->remove({foo => 'bar'}, {single => 1});
 
 Remove documents from collection. You can also append a callback to perform
 operation non-blocking.
 
   $collection->remove(({foo => 'bar'}, {single => 1}) => sub {
-    my ($collection, $err, $num) = @_;
+    my ($collection, $err, $doc) = @_;
     ...
   });
   Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
@@ -471,14 +477,14 @@ non-blocking.
 
 =head2 update
 
-  my $num = $collection->update({foo => 'bar'}, {foo => 'baz'});
-  my $num = $collection->update({foo => 'bar'}, {foo => 'baz'}, {multi => 1});
+  my $doc = $collection->update({foo => 'bar'}, {foo => 'baz'});
+  my $doc = $collection->update({foo => 'bar'}, {foo => 'baz'}, {multi => 1});
 
 Update document in collection. You can also append a callback to perform
 operation non-blocking.
 
   $collection->update(({foo => 'bar'}, {foo => 'baz'}, {multi => 1}) => sub {
-    my ($collection, $err, $num) = @_;
+    my ($collection, $err, $doc) = @_;
     ...
   });
   Mojo::IOLoop->start unless Mojo::IOLoop->is_running;

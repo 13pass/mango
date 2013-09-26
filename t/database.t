@@ -1,19 +1,19 @@
 use Mojo::Base -strict;
 
 use Test::More;
+
+plan skip_all => 'set TEST_ONLINE to enable this test'
+  unless $ENV{TEST_ONLINE};
+
 use List::Util 'first';
 use Mango;
 use Mango::BSON 'bson_code';
 use Mojo::IOLoop;
 
-plan skip_all => 'set TEST_ONLINE to enable this test'
-  unless $ENV{TEST_ONLINE};
-
 # Run command blocking
 my $mango = Mango->new($ENV{TEST_ONLINE});
 my $db    = $mango->db;
 ok $db->command('getnonce')->{nonce}, 'command was successful';
-ok !$mango->is_active, 'no operations in progress';
 
 # Run command non-blocking
 my ($fail, $result);
@@ -26,7 +26,6 @@ $db->command(
   }
 );
 Mojo::IOLoop->start;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 ok $result, 'command was successful';
 
@@ -44,7 +43,6 @@ $db->stats(
   }
 );
 Mojo::IOLoop->start;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 is $result->{db}, $db->name, 'right name';
 
@@ -67,7 +65,6 @@ $db->collection_names(
   }
 );
 Mojo::IOLoop->start;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 ok first { $_ eq 'database_test' } @$result, 'found collection';
 $collection->drop;
@@ -95,7 +92,6 @@ $mango->db->command(
 );
 Mojo::IOLoop->start;
 Mojo::IOLoop->remove($id);
-ok !$mango->is_active, 'no operations in progress';
 like $fail, qr/Premature connection close/, 'right error';
 is_deeply $result, {}, 'command was not successful';
 

@@ -23,7 +23,7 @@ has protocol        => sub { Mango::Protocol->new };
 has w               => 1;
 has wtimeout        => 1000;
 
-our $VERSION = '0.06';
+our $VERSION = '0.13';
 
 # Operations with reply
 for my $name (qw(get_more query)) {
@@ -46,12 +46,12 @@ for my $name (qw(delete insert update)) {
     my ($next, $msg) = $self->_build($name, $ns, @_);
     $next = $self->_id;
     $ns =~ s/\..+$/\.\$cmd/;
-    my $command = bson_doc
+    my $gle = bson_doc
       getLastError => 1,
       j            => $self->j ? bson_true : bson_false,
       w            => $self->w,
       wtimeout     => $self->wtimeout;
-    $msg .= $self->protocol->build_query($next, $ns, {}, 0, -1, $command, {});
+    $msg .= $self->protocol->build_query($next, $ns, {}, 0, -1, $gle, {});
 
     warn "-- Operation $next ($name)\n" if DEBUG;
     $self->_start({id => $next, safe => 1, msg => $msg, cb => $cb});
@@ -91,19 +91,14 @@ sub new {
   return $self;
 }
 
+sub backlog { scalar @{shift->{queue} || []} }
+
 sub db {
   my ($self, $name) = @_;
   $name //= $self->default_db;
   my $db = Mango::Database->new(mango => $self, name => $name);
   weaken $db->{mango};
   return $db;
-}
-
-sub is_active {
-  my $self = shift;
-  return !!(@{$self->{queue} || []}
-    || grep { $_->{last} && !$_->{start} }
-    values %{$self->{connections} || {}});
 }
 
 sub kill_cursors {
@@ -114,6 +109,13 @@ sub kill_cursors {
   $self->_start({id => $next, safe => 0, msg => $msg, cb => $cb});
 }
 
+sub _active {
+  my $self = shift;
+  return 1 if $self->backlog;
+  return !!grep { $_->{last} && !$_->{start} }
+    values %{$self->{connections} || {}};
+}
+
 sub _auth {
   my ($self, $id, $credentials, $auth, $err, $reply) = @_;
   my ($db, $user, $pass) = @$auth;
@@ -121,10 +123,10 @@ sub _auth {
   # Run "authenticate" command with "nonce" value
   my $nonce = $reply->{docs}[0]{nonce} // '';
   my $key = md5_sum $nonce . $user . md5_sum "$user:mongo:$pass";
-  my $command
+  my $authenticate
     = bson_doc(authenticate => 1, user => $user, nonce => $nonce, key => $key);
   my $cb = sub { shift->_connected($id, $credentials) };
-  $self->_fast($id, $db, $command, $cb);
+  $self->_fast($id, $db, $authenticate, $cb);
 }
 
 sub _build {
@@ -139,6 +141,7 @@ sub _cleanup {
   return unless my $loop = $self->_loop;
 
   # Clean up connections
+  delete $self->{pid};
   my $connections = delete $self->{connections};
   $loop->remove($_) for keys %$connections;
 
@@ -165,14 +168,14 @@ sub _connect {
       my ($loop, $err, $stream) = @_;
 
       # Connection error
-      return $self && $self->_error($id, $err) if $err;
+      return $self->_error($id, $err) if $err;
 
       # Connection established
       $stream->timeout(0);
       $stream->on(close => sub { $self->_close($id) });
       $stream->on(error => sub { $self && $self->_error($id, pop) });
       $stream->on(read => sub { $self->_read($id, pop) });
-      $self->_connected($id, [@{$self->credentials}]);
+      $self->emit(connection => $id)->_connected($id, [@{$self->credentials}]);
     }
   );
   $self->{connections}{$id} = {start => 1};
@@ -260,12 +263,15 @@ sub _read {
 sub _start {
   my ($self, $op) = @_;
 
+  # Fork safety
+  $self->_cleanup unless ($self->{pid} //= $$) eq $$;
+
   # Non-blocking
   if ($op->{cb}) {
 
     # Start non-blocking
     unless ($self->{nb}) {
-      croak 'Blocking operation in progress' if $self->is_active;
+      croak 'Blocking operation in progress' if $self->_active;
       warn "-- Switching to non-blocking mode\n" if DEBUG;
       $self->_cleanup;
       $self->{nb}++;
@@ -276,7 +282,7 @@ sub _start {
 
   # Start blocking
   if ($self->{nb}) {
-    croak 'Non-blocking operations in progress' if $self->is_active;
+    croak 'Non-blocking operations in progress' if $self->_active;
     warn "-- Switching to blocking mode\n" if DEBUG;
     $self->_cleanup;
     delete $self->{nb};
@@ -299,10 +305,17 @@ sub _start {
 sub _write {
   my ($self, $id) = @_;
 
+  # Make sure connection has not been corrupted while event loop was stopped
   my $c = $self->{connections}{$id};
   return $c->{start} if $c->{last};
-  return undef       unless my $stream = $self->_loop->stream($id);
-  delete $c->{start} unless my $last   = delete $c->{fast};
+  my $loop = $self->_loop;
+  return undef unless my $stream = $loop->stream($id);
+  if (!$loop->is_running && $stream->is_readable) {
+    $stream->close;
+    return undef;
+  }
+
+  delete $c->{start} unless my $last = delete $c->{fast};
   return $c->{start} unless $c->{last} = $last ||= shift @{$self->{queue}};
   warn "-- Client >>> Server ($last->{id})\n" if DEBUG;
   $stream->write(delete $last->{msg});
@@ -320,7 +333,7 @@ sub _write {
 
 =head1 NAME
 
-Mango - Pure-Perl non-blocking I/O MongoDB client
+Mango - Pure-Perl non-blocking I/O MongoDB driver
 
 =head1 SYNOPSIS
 
@@ -373,7 +386,7 @@ Mango - Pure-Perl non-blocking I/O MongoDB client
 
 =head1 DESCRIPTION
 
-L<Mango> is a pure-Perl non-blocking I/O MongoDB client, optimized for use
+L<Mango> is a pure-Perl non-blocking I/O MongoDB driver, optimized for use
 with the L<Mojolicious> real-time web framework, and with multiple event loop
 support.
 
@@ -383,10 +396,16 @@ L<official documentation|http://docs.mongodb.org>.
 Note that this whole distribution is EXPERIMENTAL and will change without
 warning!
 
-Many features are still incomplete or missing, so you should wait for a stable
+Most of the API is not changing much anymore, but you should wait for a stable
 1.0 release before using any of the modules in this distribution in a
 production environment. Unsafe operations are not supported, so far this is
 considered a feature.
+
+Many arguments passed to methods as well as values of attributes get
+serialized to BSON with L<Mango::BSON>, which provides many helper functions
+you can use to generate data types that are not available natively in Perl.
+All connections will be reset automatically if a new process has been forked,
+this allows multiple processes to share the same L<Mango> object safely.
 
 For better scalability (epoll, kqueue) and to provide IPv6 as well as TLS
 support, the optional modules L<EV> (4.0+), L<IO::Socket::IP> (0.16+) and
@@ -398,6 +417,15 @@ MOJO_NO_IPV6 and MOJO_NO_TLS environment variables.
 
 L<Mango> inherits all events from L<Mojo::EventEmitter> and can emit the
 following new ones.
+
+=head2 connection
+
+  $mango->on(connection => sub {
+    my ($mango, $id) = @_;
+    ...
+  });
+
+Emitted when a new connection has been established.
 
 =head2 error
 
@@ -471,7 +499,7 @@ Protocol handler, defaults to a L<Mango::Protocol> object.
 =head2 w
 
   my $w  = $mango->w;
-  $mango = $mango->w(1);
+  $mango = $mango->w(2);
 
 Wait for all operations to have reached at least this many servers, C<1>
 indicates just primary, C<2> indicates primary and at least one secondary,
@@ -492,9 +520,15 @@ new ones.
 =head2 new
 
   my $mango = Mango->new;
-  my $mango = Mango->new('mongodb://localhost:3000/mango_test?w=2');
+  my $mango = Mango->new('mongodb://sri:s3cret@localhost:3000/test?w=2');
 
 Construct a new L<Mango> object.
+
+=head2 backlog
+
+  my $num = $mango->backlog;
+
+Number of queued operations that have not yet been assigned to a connection.
 
 =head2 db
 
@@ -502,7 +536,8 @@ Construct a new L<Mango> object.
   my $db = $mango->db('test');
 
 Get L<Mango::Database> object for database, uses C<default_db> if no name is
-provided.
+provided. Note that the reference L<Mango::Database/"mango"> is weakened, so
+the L<Mango> object needs to be referenced elsewhere as well.
 
 =head2 delete
 
@@ -542,12 +577,6 @@ can also append a callback to perform operation non-blocking.
     ...
   });
   Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
-
-=head2 is_active
-
-  my $success = $mango->is_active;
-
-Check if there are still operations in progress.
 
 =head2 kill_cursors
 

@@ -1,11 +1,13 @@
 use Mojo::Base -strict;
 
 use Test::More;
-use Mango;
-use Mojo::IOLoop;
 
 plan skip_all => 'set TEST_ONLINE to enable this test'
   unless $ENV{TEST_ONLINE};
+
+use Mango;
+use Mango::BSON 'bson_oid';
+use Mojo::IOLoop;
 
 # Clean up before start
 my $mango  = Mango->new($ENV{TEST_ONLINE});
@@ -16,7 +18,9 @@ $gridfs->$_->remove for qw(files chunks);
 my $writer = $gridfs->writer;
 $writer->filename('foo.txt')->content_type('text/plain')
   ->metadata({foo => 'bar'});
-my $oid    = $writer->write('hello ')->write('world!')->close;
+ok !$writer->is_closed, 'file has not been closed';
+my $oid = $writer->write('hello ')->write('world!')->close;
+ok $writer->is_closed, 'file has been closed';
 my $reader = $gridfs->reader;
 is $reader->tell, 0, 'right position';
 $reader->open($oid);
@@ -47,6 +51,7 @@ $gridfs->$_->drop for qw(files chunks);
 $writer = $gridfs->writer->chunk_size(4);
 $writer->filename('foo.txt')->content_type('text/plain')
   ->metadata({foo => 'bar'});
+ok !$writer->is_closed, 'file has not been closed';
 my ($fail, $result);
 my $delay = Mojo::IOLoop->delay(
   sub {
@@ -76,8 +81,8 @@ my $delay = Mojo::IOLoop->delay(
   }
 );
 $delay->wait;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
+ok $writer->is_closed, 'file has been closed';
 $reader = $gridfs->reader;
 $fail   = undef;
 $reader->open(
@@ -88,7 +93,6 @@ $reader->open(
   }
 );
 Mojo::IOLoop->start;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 is $reader->filename,     'foo.txt',    'right filename';
 is $reader->content_type, 'text/plain', 'right content type';
@@ -107,7 +111,6 @@ $cb = sub {
 };
 $reader->$cb(undef, '');
 Mojo::IOLoop->start;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 is $data, 'hello world!', 'right content';
 my ($before, $after);
@@ -132,7 +135,6 @@ $delay = Mojo::IOLoop->delay(
   }
 );
 $delay->wait;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 is_deeply $before, ['foo.txt'], 'right files';
 is_deeply $after, [], 'no files';
@@ -173,7 +175,6 @@ $delay = Mojo::IOLoop->delay(
   }
 );
 $delay->wait;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 is $results[0], $one, 'right version';
 is $results[1], $two, 'right version';
@@ -200,10 +201,46 @@ $delay = Mojo::IOLoop->delay(
   }
 );
 $delay->wait;
-ok !$mango->is_active, 'no operations in progress';
 ok !$fail, 'no error';
 is $results[0], 'One', 'right content';
 is $results[1], 'Two', 'right content';
 $gridfs->$_->drop for qw(files chunks);
+
+# File already closed
+$writer = $gridfs->writer;
+ok !$writer->is_closed, 'file has not been closed';
+$oid = $writer->write('Test')->close;
+ok $writer->is_closed, 'file has been closed';
+eval { $writer->write('123') };
+like $@, qr/^File already closed/, 'right error';
+$fail = undef;
+$writer->write(
+  '123' => sub {
+    my ($writer, $err) = @_;
+    $fail = $err;
+    Mojo::IOLoop->stop;
+  }
+);
+Mojo::IOLoop->start;
+like $fail, qr/^File already closed/, 'right error';
+ok $writer->is_closed, 'file is still closed';
+is $writer->close, $oid, 'right result';
+($fail, $result) = ();
+$writer->close(
+  sub {
+    my ($writer, $err, $oid) = @_;
+    $fail   = $err;
+    $result = $oid;
+    Mojo::IOLoop->stop;
+  }
+);
+Mojo::IOLoop->start;
+ok !$fail, 'no error';
+is $result, $oid, 'right result';
+ok $writer->is_closed, 'file is still closed';
+$gridfs->$_->drop for qw(files chunks);
+
+# Missing file
+is $gridfs->reader->open(bson_oid)->slurp, undef, 'no content';
 
 done_testing();

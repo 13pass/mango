@@ -4,7 +4,7 @@ This fork only add the 'slave_ok' flag to 1 by default to allow mango to read on
 
 # Mango [![Build Status](https://secure.travis-ci.org/kraih/mango.png)](http://travis-ci.org/kraih/mango)
 
-  Pure-Perl non-blocking I/O MongoDB client, optimized for use with the
+  Pure-Perl non-blocking I/O MongoDB driver, optimized for use with the
   [Mojolicious](http://mojolicio.us) real-time web framework.
 
     use Mojolicious::Lite;
@@ -25,13 +25,13 @@ This fork only add the 'slave_ok' flag to 1 by default to allow mango to read on
       $collection->insert({when => bson_time, from => $ip} => sub {
         my ($collection, $err, $oid) = @_;
 
-        return $self->render_exception if $err;
+        return $self->render_exception($err) if $err;
 
         # Retrieve information about previous visitors
-        $collection->find({})->sort({when => -1})->fields({_id => 0})->all(sub {
+        $collection->find->sort({when => -1})->fields({_id => 0})->all(sub {
           my ($collection, $err, $docs) = @_;
 
-          return $self->render_exception if $err;
+          return $self->render_exception($err) if $err;
 
           # And show it to current visitor
           $self->render(json => $docs);

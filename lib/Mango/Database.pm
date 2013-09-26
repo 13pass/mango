@@ -72,6 +72,7 @@ Mango::Database - MongoDB database
 
   my $db = Mango::Database->new(mango => $mango);
   my $collection = $db->collection('foo');
+  my $gridfs     = $db->gridfs;
 
 =head1 DESCRIPTION
 
@@ -86,7 +87,8 @@ L<Mango::Database> implements the following attributes.
   my $mango = $db->mango;
   $db       = $db->mango(Mango->new);
 
-L<Mango> object this database belongs to.
+L<Mango> object this database belongs to. Note that this reference is usually
+weakened, so the L<Mango> object needs to be referenced elsewhere as well.
 
 =head2 name
 
@@ -122,12 +124,12 @@ perform operation non-blocking.
 =head2 command
 
   my $doc = $db->command(bson_doc(getLastError => 1, w => 2));
-  my $doc = $db->command('getLastError', {w => 2});
+  my $doc = $db->command('getLastError', w => 2);
 
 Run command against database. You can also append a callback to run command
 non-blocking.
 
-  $db->command(('getLastError', {w => 2}) => sub {
+  $db->command(('getLastError', w => 2) => sub {
     my ($db, $err, $doc) = @_;
     ...
   });
